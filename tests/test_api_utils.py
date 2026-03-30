@@ -9,6 +9,7 @@ text processing, content extraction, and format conversion.
 from omlx.api.utils import (
     SPECIAL_TOKENS_PATTERN,
     _consolidate_system_messages,
+    _drop_void_assistant_messages,
     _merge_consecutive_roles,
     clean_output_text,
     detect_and_strip_partial,
@@ -246,11 +247,20 @@ class TestExtractTextContent:
         assert "Hello" in result[0]["content"]
 
     def test_none_content(self):
-        """Test extracting message with None content."""
+        """Test that assistant with None content and no tool_calls is dropped (void message)."""
         messages = [Message(role="assistant", content=None)]
 
         result = extract_text_content(messages)
 
+        assert len(result) == 0
+
+    def test_none_content_non_assistant_preserved(self):
+        """Test that non-assistant messages with None content are preserved."""
+        messages = [Message(role="user", content=None)]
+
+        result = extract_text_content(messages)
+
+        assert len(result) == 1
         assert result[0]["content"] == ""
 
     def test_tool_response_message(self):
@@ -354,6 +364,7 @@ class TestExtractTextContent:
     def test_assistant_tool_calls_with_content_array(self):
         """Content array in assistant+tool_calls should be converted to string."""
         from unittest.mock import MagicMock
+
         mock_tokenizer = MagicMock(spec=[])
         mock_tokenizer.has_tool_calling = True
 
@@ -540,6 +551,7 @@ class TestConvertAnthropicToInternal:
 
     def test_native_tool_calling_preserves_structured_tool_history(self):
         """Tool use/result blocks should stay structured when tokenizer supports tools."""
+
         class NativeToolTokenizer:
             has_tool_calling = True
 
@@ -667,6 +679,7 @@ class TestConvertAnthropicToInternal:
 
     def test_tool_result_with_image_native_path(self):
         """Images in tool_result are preserved in native tool calling path."""
+
         class NativeToolTokenizer:
             has_tool_calling = True
 
@@ -1364,7 +1377,10 @@ class TestExtractMultimodalContent:
                 role="user",
                 content=[
                     {"type": "text", "text": "Analyze"},
-                    {"type": "input_image", "image_url": {"url": "https://example.com/a.png"}},
+                    {
+                        "type": "input_image",
+                        "image_url": {"url": "https://example.com/a.png"},
+                    },
                 ],
             )
         ]
@@ -1464,7 +1480,9 @@ class TestExtractTextContentPreservesNamePartial:
                 role="assistant",
                 content="Let me call a tool",
                 name="Kimi",
-                tool_calls=[{"id": "1", "function": {"name": "search", "arguments": "{}"}}],
+                tool_calls=[
+                    {"id": "1", "function": {"name": "search", "arguments": "{}"}}
+                ],
             ),
         ]
         result = extract_text_content(messages)
@@ -1572,3 +1590,75 @@ class TestNameFieldSchemaAcceptance:
         msgs = [Message(role="user", content="Hello")]
         result = extract_text_content(msgs)
         assert "name" not in result[0]
+
+
+class TestDropVoidAssistantMessages:
+    """Tests for _drop_void_assistant_messages."""
+
+    def test_drops_empty_content_no_tool_calls(self):
+        """Assistant message with empty content and no tool_calls should be dropped."""
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "Again"},
+        ]
+        result = _drop_void_assistant_messages(msgs)
+        assert len(result) == 2
+        assert result[0]["role"] == "user"
+        assert result[1]["role"] == "user"
+
+    def test_drops_none_content_no_tool_calls(self):
+        """Assistant message with None content and no tool_calls should be dropped."""
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": None},
+            {"role": "user", "content": "Again"},
+        ]
+        result = _drop_void_assistant_messages(msgs)
+        assert len(result) == 2
+
+    def test_keeps_assistant_with_content(self):
+        """Assistant message with non-empty content should be kept."""
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "Thanks"},
+        ]
+        result = _drop_void_assistant_messages(msgs)
+        assert len(result) == 3
+
+    def test_keeps_assistant_with_tool_calls(self):
+        """Assistant message with tool_calls should be kept even if content is empty."""
+        msgs = [
+            {"role": "user", "content": "List files"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "1", "function": {"name": "ls"}}],
+            },
+            {"role": "user", "content": "Thanks"},
+        ]
+        result = _drop_void_assistant_messages(msgs)
+        assert len(result) == 3
+
+    def test_preserves_other_roles(self):
+        """Non-assistant messages should never be dropped."""
+        msgs = [
+            {"role": "system", "content": ""},
+            {"role": "user", "content": ""},
+            {"role": "tool", "content": ""},
+        ]
+        result = _drop_void_assistant_messages(msgs)
+        assert len(result) == 3
+
+    def test_extract_text_content_drops_void_assistant(self):
+        """Integration: extract_text_content should drop void assistant messages."""
+        msgs = [
+            Message(role="user", content="Hello"),
+            Message(role="assistant", content=None),
+            Message(role="user", content="Tell me about this repo"),
+        ]
+        result = extract_text_content(msgs)
+        # The void assistant message should be dropped, and the two user
+        # messages merged by _merge_consecutive_roles
+        assert all(m["role"] != "assistant" or m.get("content") for m in result)
