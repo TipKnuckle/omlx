@@ -352,15 +352,16 @@ class VLMBatchedEngine(BaseEngine):
         logger.info("VLMBatchedEngine stopped")
 
     def _inject_tool_calling(self, tokenizer) -> None:
-        """Inject mlx-lm's tool calling attributes into VLM tokenizer.
+        """Inject tool calling attributes into VLM tokenizer.
 
         mlx-vlm's TokenizerWrapper lacks tool calling support (has_tool_calling,
-        tool_parser, etc). We reuse mlx-lm's _infer_tool_parser() to detect the
-        parser type from the chat template, then set the attributes directly on
-        the wrapper instance so parse_tool_calls() can use native tool parsing.
+        tool_parser, etc). We use mlx-vlm's _infer_tool_parser (which extends
+        mlx-lm's with VLM-specific models) and load_tool_module (which prefers
+        mlx_vlm.tool_parsers over mlx_lm.tool_parsers) to detect and wire up
+        the right parser for the model's chat template.
         """
         try:
-            from mlx_lm.tokenizer_utils import _infer_tool_parser
+            from mlx_vlm.tool_parsers import _infer_tool_parser, load_tool_module
         except ImportError:
             return
 
@@ -373,11 +374,7 @@ class VLMBatchedEngine(BaseEngine):
             return
 
         try:
-            import importlib
-
-            tool_module = importlib.import_module(
-                f"mlx_lm.tool_parsers.{tool_parser_type}"
-            )
+            tool_module = load_tool_module(tool_parser_type)
         except ImportError:
             logger.warning(
                 f"VLM tool parser module not found: {tool_parser_type}"
