@@ -3572,6 +3572,17 @@ async def create_response(
         cleaned_text = extraction.cleaned_text
         tool_calls = extraction.tool_calls
 
+    # Process response_format if specified
+    if response_format and not tool_calls:
+        cleaned_text, parsed_json, is_valid, error = parse_json_output(
+            cleaned_text or regular_content,
+            response_format
+        )
+        if parsed_json is not None:
+            cleaned_text = json.dumps(parsed_json)
+        if not is_valid:
+            logger.warning(f"JSON validation failed: {error}")
+
     # Build output items
     output_items: list[OutputItem] = []
     output_items.append(
