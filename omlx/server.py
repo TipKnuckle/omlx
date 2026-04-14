@@ -3694,7 +3694,7 @@ async def create_response(
                     store_response=_should_store_response(request.store),
                     model_load_duration=model_load_duration,
                     resolved_model=resolved_model,
-                    response_format=response_format,
+
                     **chat_kwargs,
                 ),
                 http_request=http_request,
@@ -3753,16 +3753,6 @@ async def create_response(
                     except (json.JSONDecodeError, AttributeError):
                         pass
 
-        # Process response_format if specified
-        if response_format and not tool_calls:
-            cleaned_text, parsed_json, is_valid, error = parse_json_output(
-                cleaned_text or regular_content,
-                response_format
-            )
-            if parsed_json is not None:
-                cleaned_text = json.dumps(parsed_json)
-            if not is_valid:
-                logger.warning(f"JSON validation failed: {error}")
 
         # Build output items
         output_items: list[OutputItem] = []
@@ -3828,7 +3818,7 @@ async def stream_responses_api(
     store_response: bool = True,
     model_load_duration: float = 0.0,
     resolved_model: Optional[str] = None,
-    response_format=None,
+
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream Responses API events (SSE with named event types)."""
