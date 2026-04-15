@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 ModelType = Literal["llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
@@ -257,6 +259,7 @@ class DiscoveredModel:
     estimated_size: int  # Estimated memory usage in bytes
     config_model_type: str = ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     thinking_default: bool | None = None  # True if model thinks by default, False if not, None if unknown
+    source_model_id: str | None = None  # Set for virtual models; points to the physical model ID
 
 
 def _is_unsupported_model(model_path: Path) -> bool:
@@ -673,6 +676,77 @@ def _register_model(
         logger.error(f"Failed to discover model {model_id}: {e}")
 
 
+def _register_virtual_models(
+    models: dict[str, DiscoveredModel],
+    model_dir: Path,
+) -> None:
+    """
+    Scan model_dir for *.virtual.yaml files and register virtual models.
+
+    A virtual model file must contain a `source` key naming an already-discovered
+    physical model ID. The virtual model shares the source's model path and engine
+    type but has its own independent settings in model_settings.json.
+
+    Example file (Qwen3.5-9B-nothink.virtual.yaml):
+        source: Qwen3.5-9B-MLX-4bit
+
+    The virtual model ID is the filename stem before ".virtual" (e.g. "Qwen3.5-9B-nothink").
+    """
+    for yaml_file in sorted(model_dir.glob("*.virtual.yaml")):
+        virtual_id = yaml_file.name[: -len(".virtual.yaml")]
+
+        try:
+            with open(yaml_file) as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning(f"Skipping {yaml_file.name}: failed to parse YAML: {e}")
+            continue
+
+        source_id = data.get("source", "")
+        if not source_id:
+            logger.warning(
+                f"Skipping {yaml_file.name}: missing required 'source' field"
+            )
+            continue
+
+        if source_id not in models:
+            logger.warning(
+                f"Skipping virtual model '{virtual_id}': "
+                f"source model '{source_id}' not found"
+            )
+            continue
+
+        if virtual_id in models:
+            logger.warning(
+                f"Skipping virtual model '{virtual_id}': "
+                f"name conflicts with an existing physical model"
+            )
+            continue
+
+        source = models[source_id]
+        # Circular reference guard: source must be a physical model
+        if source.source_model_id is not None:
+            logger.warning(
+                f"Skipping virtual model '{virtual_id}': "
+                f"source '{source_id}' is itself a virtual model"
+            )
+            continue
+
+        models[virtual_id] = DiscoveredModel(
+            model_id=virtual_id,
+            model_path=source.model_path,
+            model_type=source.model_type,
+            engine_type=source.engine_type,
+            estimated_size=0,  # virtual models share the source engine; no additional memory
+            config_model_type=source.config_model_type,
+            thinking_default=source.thinking_default,
+            source_model_id=source_id,
+        )
+        logger.info(
+            f"Discovered virtual model: {virtual_id} (source: {source_id})"
+        )
+
+
 def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
     """
     Scan model directory with two-level discovery.
@@ -757,6 +831,9 @@ def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
     #   /Models/Qwen3.5-9B-MLX-4bit/  (contains config.json and weight files)
     if not models and _is_model_dir(model_dir):
         _register_model(models, model_dir, model_dir.name)
+
+    # Scan for virtual model definitions (*.virtual.yaml) in the top-level directory.
+    _register_virtual_models(models, model_dir)
 
     return models
 

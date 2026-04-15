@@ -1063,3 +1063,105 @@ class TestHfCacheDiscovery:
         models = discover_models(tmp_path)
         assert len(models) == 1
         assert "Qwen3-8B-4bit" in models
+
+
+class TestVirtualModels:
+    """Tests for virtual model discovery via *.virtual.yaml files."""
+
+    def _make_model(self, parent: Path, name: str) -> Path:
+        """Create a minimal physical model directory."""
+        d = parent / name
+        d.mkdir(parents=True)
+        (d / "config.json").write_text(
+            json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]})
+        )
+        (d / "model.safetensors").write_bytes(b"\x00" * 16)  # dummy weights
+        return d
+
+    def test_virtual_model_discovered(self, tmp_path):
+        """A .virtual.yaml file creates a virtual DiscoveredModel entry."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Llama-3B-fast.virtual.yaml").write_text("source: Llama-3B\n")
+
+        models = discover_models(tmp_path)
+        assert "Llama-3B" in models
+        assert "Llama-3B-fast" in models
+
+        virt = models["Llama-3B-fast"]
+        assert virt.source_model_id == "Llama-3B"
+        assert virt.model_type == models["Llama-3B"].model_type
+        assert virt.engine_type == models["Llama-3B"].engine_type
+        assert virt.estimated_size == 0
+
+    def test_virtual_model_inherits_source_path(self, tmp_path):
+        """Virtual model shares the source model's model_path."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Llama-3B-fast.virtual.yaml").write_text("source: Llama-3B\n")
+
+        models = discover_models(tmp_path)
+        assert models["Llama-3B-fast"].model_path == models["Llama-3B"].model_path
+
+    def test_virtual_model_missing_source_skipped(self, tmp_path):
+        """Virtual model referencing a non-existent source is silently skipped."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Ghost.virtual.yaml").write_text("source: Does-Not-Exist\n")
+
+        models = discover_models(tmp_path)
+        assert "Ghost" not in models
+        assert "Llama-3B" in models
+
+    def test_virtual_model_missing_source_field_skipped(self, tmp_path):
+        """Virtual model YAML without a 'source' field is skipped."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Bad.virtual.yaml").write_text("temperature: 0.7\n")
+
+        models = discover_models(tmp_path)
+        assert "Bad" not in models
+
+    def test_virtual_model_name_conflicts_with_physical_skipped(self, tmp_path):
+        """Virtual model whose name matches an existing physical model is skipped."""
+        self._make_model(tmp_path, "Llama-3B")
+        # This yaml would register "Llama-3B" again — should be rejected
+        (tmp_path / "Llama-3B.virtual.yaml").write_text("source: Llama-3B\n")
+
+        models = discover_models(tmp_path)
+        # Physical model should still be there, and source_model_id must be None
+        assert "Llama-3B" in models
+        assert models["Llama-3B"].source_model_id is None
+
+    def test_virtual_model_cannot_point_to_virtual(self, tmp_path):
+        """A virtual model cannot chain to another virtual model."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Llama-3B-v1.virtual.yaml").write_text("source: Llama-3B\n")
+        # Attempt to chain: v2 points to v1 (itself a virtual)
+        (tmp_path / "Llama-3B-v2.virtual.yaml").write_text("source: Llama-3B-v1\n")
+
+        models = discover_models(tmp_path)
+        assert "Llama-3B-v1" in models     # first virtual: OK
+        assert "Llama-3B-v2" not in models  # chained virtual: rejected
+
+    def test_multiple_virtual_models_from_same_source(self, tmp_path):
+        """Multiple virtual models can point to the same physical source."""
+        self._make_model(tmp_path, "Qwen-7B")
+        (tmp_path / "Qwen-7B-nothink.virtual.yaml").write_text("source: Qwen-7B\n")
+        (tmp_path / "Qwen-7B-creative.virtual.yaml").write_text("source: Qwen-7B\n")
+
+        models = discover_models(tmp_path)
+        assert len(models) == 3
+        assert models["Qwen-7B-nothink"].source_model_id == "Qwen-7B"
+        assert models["Qwen-7B-creative"].source_model_id == "Qwen-7B"
+
+    def test_virtual_model_invalid_yaml_skipped(self, tmp_path):
+        """Malformed YAML is silently skipped."""
+        self._make_model(tmp_path, "Llama-3B")
+        (tmp_path / "Bad.virtual.yaml").write_text(": : :\n")
+
+        models = discover_models(tmp_path)
+        assert "Bad" not in models
+        assert "Llama-3B" in models
+
+    def test_physical_model_source_model_id_is_none(self, tmp_path):
+        """Physical models always have source_model_id == None."""
+        self._make_model(tmp_path, "Llama-3B")
+        models = discover_models(tmp_path)
+        assert models["Llama-3B"].source_model_id is None

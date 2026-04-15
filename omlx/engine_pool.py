@@ -57,6 +57,7 @@ class EngineEntry:
     estimated_size: int  # Pre-calculated from safetensors (bytes)
     config_model_type: str = ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     thinking_default: bool | None = None  # True if model thinks by default, False if not, None if unknown
+    source_model_id: str | None = None  # Set for virtual models; delegates engine loading to the source
     engine: BaseEngine | EmbeddingEngine | RerankerEngine | STTEngine | STSEngine | TTSEngine | None = None  # Loaded engine instance
     last_access: float = 0.0  # Timestamp for LRU (0 if never loaded)
     is_loading: bool = False  # Prevent concurrent loads
@@ -158,6 +159,7 @@ class EnginePool:
                     estimated_size=info.estimated_size,
                     config_model_type=getattr(info, "config_model_type", ""),
                     thinking_default=getattr(info, "thinking_default", None),
+                    source_model_id=getattr(info, "source_model_id", None),
                     is_pinned=model_id in pinned_set,
                 )
 
@@ -317,6 +319,15 @@ class EnginePool:
             InsufficientMemoryError: If can't free enough memory (all pinned)
             ModelLoadingError: If model is already being loaded
         """
+        # Virtual model: delegate to source engine before acquiring the lock.
+        # Virtual entries share the source's engine but have independent settings.
+        # This check is safe without the lock because _entries is only mutated
+        # during discover_models(), which runs at startup/reload, not during requests.
+        entry = self._entries.get(model_id)
+        if entry is not None and entry.source_model_id is not None:
+            entry.last_access = time.time()
+            return await self.get_engine(entry.source_model_id, force_lm)
+
         async with self._lock:
             entry = self._entries.get(model_id)
             if not entry:
@@ -867,6 +878,7 @@ class EnginePool:
                     "model_type": e.model_type,
                     "config_model_type": e.config_model_type,
                     "thinking_default": e.thinking_default,
+                    "source_model_id": e.source_model_id,
                     "last_access": e.last_access if e.last_access > 0 else None,
                 }
                 for mid, e in sorted(self._entries.items())

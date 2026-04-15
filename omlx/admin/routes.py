@@ -1347,6 +1347,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "model_type": model_info.get("model_type", "llm"),
             "config_model_type": model_info.get("config_model_type", ""),
             "thinking_default": model_info.get("thinking_default"),
+            "source_model_id": model_info.get("source_model_id"),
             "last_access": model_info.get("last_access"),
         }
 

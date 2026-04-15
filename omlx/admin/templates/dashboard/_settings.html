@@ -840,6 +840,9 @@
                                             <span x-show="model.settings?.model_alias" x-cloak
                                                   class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-neutral-100 text-neutral-500 border border-neutral-200 truncate max-w-[120px]"
                                                   x-text="model.settings?.model_alias"></span>
+                                            <span x-show="model.source_model_id" x-cloak
+                                                  class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 text-purple-600 border border-purple-200 truncate max-w-[120px]"
+                                                  :title="'Virtual → ' + model.source_model_id">Virtual</span>
                                             <button x-data="{ copied: false }"
                                                     @click.stop="copyToClipboard(model.id); copied = true; setTimeout(() => copied = false, 2000)"
                                                     class="p-1 rounded-md transition-all flex-shrink-0"
@@ -875,8 +878,16 @@
                                                     <span x-text="window.t('settings.models.table.status_loading')"></span>
                                                 </span>
                                             </template>
+                                            <!-- Virtual model: no load/unload (shares source engine) -->
+                                            <template x-if="!model.is_loading && model.source_model_id">
+                                                <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full gap-1 bg-purple-100 text-purple-600"
+                                                      :title="'Shares engine with ' + model.source_model_id">
+                                                    <span class="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                                                    <span>Virtual</span>
+                                                </span>
+                                            </template>
                                             <!-- Loaded state -->
-                                            <template x-if="!model.is_loading && model.loaded">
+                                            <template x-if="!model.is_loading && !model.source_model_id && model.loaded">
                                                 <button @click="unloadModel(model.id)"
                                                         :class="hover
                                                             ? 'bg-red-100 text-red-700 cursor-pointer'
@@ -887,7 +898,7 @@
                                                 </button>
                                             </template>
                                             <!-- Ready state -->
-                                            <template x-if="!model.is_loading && !model.loaded">
+                                            <template x-if="!model.is_loading && !model.source_model_id && !model.loaded">
                                                 <button @click="loadModel(model.id)"
                                                         :class="hover
                                                             ? 'bg-green-100 text-green-700 border-green-200 cursor-pointer'
